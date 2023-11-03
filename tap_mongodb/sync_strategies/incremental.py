@@ -53,37 +53,34 @@ def sync_collection(collection: Collection,
     """
     LOGGER.info('Starting incremental sync for %s', stream['tap_stream_id'])
 
+    nascent_stream_version = singer.get_bookmark(state, stream['tap_stream_id'], 'version')
     # before writing the table version to state, check if we had one to begin with
-    first_run = singer.get_bookmark(state, stream['tap_stream_id'], 'version') is None
-
-    # pick a new table version if last run wasn't interrupted
-    if first_run:
-        stream_version = int(time.time() * 1000)
+    if nascent_stream_version is None:
+        nascent_stream_version = int(time.time() * 1000)
+        first_run = True
     else:
-        stream_version = singer.get_bookmark(state, stream['tap_stream_id'], 'version')
+        first_run = False
 
     state = singer.write_bookmark(state,
                                   stream['tap_stream_id'],
                                   'version',
-                                  stream_version)
-
-    activate_version_message = singer.ActivateVersionMessage(
-        stream=common.calculate_destination_stream_name(stream),
-        version=stream_version
-    )
+                                  nascent_stream_version)
+    singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
     # For the initial replication, emit an ACTIVATE_VERSION message
     # at the beginning so the records show up right away.
     if first_run:
+        activate_version_message = singer.ActivateVersionMessage(
+            stream=common.calculate_destination_stream_name(stream),
+            version=nascent_stream_version
+        )
+        LOGGER.info("Activate version %s", nascent_stream_version)
         singer.write_message(activate_version_message)
 
     # get replication key, and bookmarked value/type
     stream_state = state.get('bookmarks', {}).get(stream['tap_stream_id'], {})
 
     replication_key_name = metadata.to_map(stream['metadata']).get(()).get('replication-key')
-
-    # write state message
-    singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
     # create query
     find_filter = {}
@@ -107,7 +104,7 @@ def sync_collection(collection: Collection,
                                                              row=row,
                                                              time_extracted=utils.now(),
                                                              time_deleted=None,
-                                                             version=stream_version))
+                                                             version=nascent_stream_version))
             rows_saved += 1
 
             update_bookmark(row, state, stream['tap_stream_id'], replication_key_name)
@@ -118,6 +115,6 @@ def sync_collection(collection: Collection,
         common.COUNTS[stream['tap_stream_id']] += rows_saved
         common.TIMES[stream['tap_stream_id']] += time.time() - start_time
 
-    singer.write_message(activate_version_message)
+    # singer.write_message(activate_version_message)
 
     LOGGER.info('Syncd %s records for %s', rows_saved, stream['tap_stream_id'])

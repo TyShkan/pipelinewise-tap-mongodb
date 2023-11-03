@@ -41,29 +41,30 @@ def sync_collection(collection: Collection, stream: Dict, state: Dict) -> None:
     LOGGER.info('Starting full table sync for %s', stream['tap_stream_id'])
 
     # before writing the table version to state, check if we had one to begin with
-    first_run = singer.get_bookmark(state, stream['tap_stream_id'], 'version') is None
+    nascent_stream_version = singer.get_bookmark(state, stream['tap_stream_id'], 'version')
 
     # last run was interrupted if there is a last_id_fetched bookmark
     # pick a new table version if last run wasn't interrupted
-    if singer.get_bookmark(state, stream['tap_stream_id'], 'last_id_fetched') is not None:
-        stream_version = singer.get_bookmark(state, stream['tap_stream_id'], 'version')
+    if singer.get_bookmark(state, stream['tap_stream_id'], 'last_id_fetched') is None:
+        nascent_stream_version = int(time.time() * 1000)
+        first_run = True
     else:
-        stream_version = int(time.time() * 1000)
+        first_run = False
 
     state = singer.write_bookmark(state,
                                   stream['tap_stream_id'],
                                   'version',
-                                  stream_version)
+                                  nascent_stream_version)
     singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
-
-    activate_version_message = singer.ActivateVersionMessage(
-        stream=common.calculate_destination_stream_name(stream),
-        version=stream_version
-    )
 
     # For the initial replication, emit an ACTIVATE_VERSION message
     # at the beginning so the records show up right away.
     if first_run:
+        activate_version_message = singer.ActivateVersionMessage(
+            stream=common.calculate_destination_stream_name(stream),
+            version=nascent_stream_version
+        )
+        LOGGER.info("Activate version %s", nascent_stream_version)
         singer.write_message(activate_version_message)
 
     if singer.get_bookmark(state, stream['tap_stream_id'], 'max_id_value'):
@@ -109,7 +110,7 @@ def sync_collection(collection: Collection, stream: Dict, state: Dict) -> None:
                                                              row=row,
                                                              time_extracted=utils.now(),
                                                              time_deleted=None,
-                                                             version=stream_version))
+                                                             version=nascent_stream_version))
 
             state = singer.write_bookmark(state,
                                           stream['tap_stream_id'],
@@ -137,6 +138,6 @@ def sync_collection(collection: Collection, stream: Dict, state: Dict) -> None:
                           'initial_full_table_complete',
                           True)
 
-    singer.write_message(activate_version_message)
+    # singer.write_message(activate_version_message)
 
     LOGGER.info('Syncd %s records for %s', rows_saved, stream['tap_stream_id'])
