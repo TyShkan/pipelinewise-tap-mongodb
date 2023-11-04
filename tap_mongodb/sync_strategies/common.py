@@ -147,6 +147,10 @@ def safe_transform_datetime(value: datetime.datetime, path):
     return utils.strftime(utc_datetime)
 
 
+def get_bson_timestamp_from_datetime(datetime: datetime.datetime, tick: int = 0):
+    return timestamp.Timestamp(datetime, tick)
+
+
 def transform_value(value: Any, path) -> Any:
     """
     transform values to json friendly ones

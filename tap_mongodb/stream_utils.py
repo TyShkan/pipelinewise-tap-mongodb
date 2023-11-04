@@ -71,7 +71,7 @@ def streams_list_to_dict(streams: List[Dict]) -> Dict[str, Dict]:
     return {stream['tap_stream_id']: stream for stream in streams}
 
 
-def filter_streams_by_replication_method(streams_to_sync: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
+def filter_streams_by_replication_method(streams_to_sync: List[Dict], state: Dict) -> Tuple[List[Dict], List[Dict]]:
     """
     Divides the list of streams into two lists: one of streams that use log based and the other that use
     traditional replication method, i.e either Full table or Incremental
@@ -86,6 +86,9 @@ def filter_streams_by_replication_method(streams_to_sync: List[Dict]) -> Tuple[L
     for stream in streams_to_sync:
         if is_log_based_stream(stream):
             log_based_streams.append(stream)
+
+            if not state.get('bookmarks', {}).get(stream['tap_stream_id'], {}).get('initial_full_table_complete', False):
+                non_log_based_streams.append(stream)
         else:
             non_log_based_streams.append(stream)
 

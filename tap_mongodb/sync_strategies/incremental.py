@@ -13,7 +13,7 @@ from tap_mongodb.sync_strategies import common
 LOGGER = singer.get_logger('tap_mongodb')
 
 
-def update_bookmark(row: Dict, state: Dict, tap_stream_id: str, replication_key_name: str) -> None:
+def update_bookmark(row: Dict, state: Dict, tap_stream_id: str, replication_key_name: str) -> Dict:
     """
     Updates replication key and type values in state bookmark
     Args:
@@ -34,10 +34,12 @@ def update_bookmark(row: Dict, state: Dict, tap_stream_id: str, replication_key_
                                       'replication_key_value',
                                       replication_key_value_bookmark)
 
-        singer.write_bookmark(state,
+        state = singer.write_bookmark(state,
                               tap_stream_id,
                               'replication_key_type',
                               replication_key_type)
+
+    return state
 
 
 def sync_collection(collection: Collection,
@@ -107,14 +109,14 @@ def sync_collection(collection: Collection,
                                                              version=nascent_stream_version))
             rows_saved += 1
 
-            update_bookmark(row, state, stream['tap_stream_id'], replication_key_name)
+            state = update_bookmark(row, state, stream['tap_stream_id'], replication_key_name)
 
             if rows_saved % common.UPDATE_BOOKMARK_PERIOD == 0:
                 singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
+        singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
+
         common.COUNTS[stream['tap_stream_id']] += rows_saved
         common.TIMES[stream['tap_stream_id']] += time.time() - start_time
-
-    # singer.write_message(activate_version_message)
 
     LOGGER.info('Syncd %s records for %s', rows_saved, stream['tap_stream_id'])

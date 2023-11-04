@@ -2,6 +2,7 @@
 import copy
 import json
 import sys
+import datetime
 from typing import List, Dict, Optional
 from urllib import parse
 
@@ -124,7 +125,7 @@ def sync_traditional_stream(client: MongoClient, stream: Dict, state: Dict):
     md_map = metadata.to_map(stream['metadata'])
     replication_method = metadata.get(md_map, (), 'replication-method')
 
-    if replication_method not in {INCREMENTAL_METHOD, FULL_TABLE_METHOD}:
+    if replication_method not in {INCREMENTAL_METHOD, FULL_TABLE_METHOD, LOG_BASED_METHOD}:
         raise InvalidReplicationMethodException(replication_method,
                                                 'replication method needs to be either FULL_TABLE or INCREMENTAL')
 
@@ -144,13 +145,12 @@ def sync_traditional_stream(client: MongoClient, stream: Dict, state: Dict):
 
         collection = client[database_name][stream["table_name"]]
 
-        if replication_method == 'FULL_TABLE':
+        if replication_method in {FULL_TABLE_METHOD, LOG_BASED_METHOD}:
             full_table.sync_collection(collection, stream, state)
         else:
             incremental.sync_collection(collection, stream, state)
 
     state = singer.set_currently_syncing(state, None)
-
     singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
 
@@ -171,8 +171,8 @@ def sync_log_based_streams(client: MongoClient,
                            log_based_streams: List[Dict],
                            database_name: str,
                            state: Dict,
-                           update_buffer_size: Optional[int],
-                           await_time_ms: Optional[int]
+                           await_time_ms: Optional[int],
+                           start_at_operation_time: Optional[datetime.datetime]
                            ):
     """
     Sync log_based streams all at once by listening on the database-level change streams events.
@@ -181,7 +181,6 @@ def sync_log_based_streams(client: MongoClient,
         log_based_streams:  list of streams to sync
         database_name: name of the database to sync from
         state: state dictionary
-        update_buffer_size: the size of buffer used to hold detected updates
         await_time_ms:  the maximum time in milliseconds for the log based to wait for changes before exiting
     """
     if not log_based_streams:
@@ -203,10 +202,9 @@ def sync_log_based_streams(client: MongoClient,
 
     with metrics.job_timer('sync_table') as timer:
         timer.tags['database'] = database_name
-        update_buffer_size = update_buffer_size or change_streams.MIN_UPDATE_BUFFER_LENGTH
         await_time_ms = await_time_ms or change_streams.DEFAULT_AWAIT_TIME_MS
 
-        change_streams.sync_database(client[database_name], streams, state, update_buffer_size, await_time_ms)
+        change_streams.sync_database(client[database_name], streams, state, await_time_ms, start_at_operation_time)
 
     state = singer.set_currently_syncing(state, None)
     singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
@@ -226,7 +224,12 @@ def do_sync(client: MongoClient, catalog: Dict, config: Dict, state: Dict):
     all_streams = catalog['streams']
     streams_to_sync = get_streams_to_sync(all_streams, state)
 
-    log_based_streams, traditional_streams = filter_streams_by_replication_method(streams_to_sync)
+    log_based_streams, traditional_streams = filter_streams_by_replication_method(streams_to_sync, state)
+
+    if log_based_streams:
+        log_based_start_at_operation_time = utils.now() - datetime.timedelta(minutes=1)
+    else:
+        log_based_start_at_operation_time = None
 
     LOGGER.debug('Starting sync of traditional streams ...')
     sync_traditional_streams(client, traditional_streams, state)
@@ -237,8 +240,8 @@ def do_sync(client: MongoClient, catalog: Dict, config: Dict, state: Dict):
                            log_based_streams,
                            config['database'],
                            state,
-                           config.get('update_buffer_size'),
-                           config.get('await_time_ms')
+                           config.get('await_time_ms'),
+                           log_based_start_at_operation_time
                            )
     LOGGER.debug('Sync of log based streams done')
 
