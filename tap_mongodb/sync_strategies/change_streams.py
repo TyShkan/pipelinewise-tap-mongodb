@@ -1,5 +1,6 @@
 import copy
 import time
+import datetime
 import singer
 
 from typing import Set, Dict, Optional, Generator
@@ -13,9 +14,6 @@ LOGGER = singer.get_logger('tap_mongodb')
 
 RESUME_TOKEN_KEY = 'token'
 DEFAULT_AWAIT_TIME_MS = 1000  # the server default https://docs.mongodb.com/manual/reference/method/db.watch/#db.watch
-MIN_UPDATE_BUFFER_LENGTH = 1 # default
-MAX_UPDATE_BUFFER_LENGTH = common.UPDATE_BOOKMARK_PERIOD # set max as the same value as bookmark period as we flush
-# the buffer anyway after every UPDATE_BOOKMARK_PERIOD
 
 
 def update_bookmarks(state: Dict, tap_stream_ids: Set[str], token: Dict) -> Dict:
@@ -33,23 +31,6 @@ def update_bookmarks(state: Dict, tap_stream_ids: Set[str], token: Dict) -> Dict
         state = singer.write_bookmark(state, stream, RESUME_TOKEN_KEY, token)
 
     return state
-
-
-def get_buffer_rows_from_db(collection: Collection,
-                            update_buffer: Set,
-                            ) -> Generator:
-    """
-    Fetches the full documents of the IDs in the buffer from the DB
-    Args:
-        collection: MongoDB Collection instance
-        update_buffer: A set of IDs whose documents needs to be fetched
-    Returns:
-        generator: it can be empty
-    """
-    query = {'_id': {'$in': list(update_buffer)}}
-
-    with collection.find(query) as cursor:
-        yield from cursor
 
 
 def get_token_from_state(streams_to_sync: Set[str], state: Dict) -> Optional[Dict]:
@@ -73,8 +54,8 @@ def get_token_from_state(streams_to_sync: Set[str], state: Dict) -> Optional[Dic
 def sync_database(database: Database,
                   streams_to_sync: Dict[str, Dict],
                   state: Dict,
-                  update_buffer_size: int,
-                  await_time_ms: int
+                  await_time_ms: int,
+                  start_at_operation_time: Optional[datetime.datetime]
                   ) -> None:
     """
     Syncs the records from the given collection using ChangeStreams
@@ -82,27 +63,33 @@ def sync_database(database: Database,
         database: MongoDB Database instance to sync
         streams_to_sync: Dict of stream dictionary with all the stream details
         state: state dictionary
-        update_buffer_size: the size of buffer used to hold detected updates
         await_time_ms:  the maximum time in milliseconds for the log based to wait for changes before exiting
     """
     LOGGER.info('Starting LogBased sync for streams "%s" in database "%s"', list(streams_to_sync.keys()), database.name)
 
     rows_saved = {}
     start_time = time.time()
-    update_buffer = {}
 
     for stream_id in streams_to_sync:
-        update_buffer[stream_id] = set()
         rows_saved[stream_id] = 0
 
     stream_ids = set(streams_to_sync.keys())
+
+    token = get_token_from_state(stream_ids, state)
+
+    if token:
+        start_at = None
+    else:
+        start_at = common.get_bson_timestamp_from_datetime(start_at_operation_time)
+
+    LOGGER.info('Starting WATCH with token %s, start_at %s', token, start_at)
 
     # Init a cursor to listen for changes from the last saved resume token
     # if there are no changes after MAX_AWAIT_TIME_MS, then we'll exit
     with database.watch(
             [{'$match': {
                 '$or': [
-                    {'operationType': 'insert'}, {'operationType': 'update'}, {'operationType': 'delete'}
+                    {'operationType': 'insert'}, {'operationType': 'update'}, {'operationType': 'delete'}, {'operationType': 'replace'}
                 ],
                 '$and': [
                     # watch collections of selected streams
@@ -110,7 +97,9 @@ def sync_database(database: Database,
                 ]
             }}],
             max_await_time_ms=await_time_ms,
-            start_after=get_token_from_state(stream_ids, state)
+            start_after=token,
+            start_at_operation_time=start_at,
+            full_document='updateLookup'
     ) as cursor:
         while cursor.alive:
 
@@ -142,6 +131,7 @@ def sync_database(database: Database,
                 break
 
             tap_stream_id = f'{change["ns"]["db"]}-{change["ns"]["coll"]}'
+            stream_version = common.get_stream_version(tap_stream_id, state)
 
             operation = change['operationType']
 
@@ -149,78 +139,49 @@ def sync_database(database: Database,
                 singer.write_message(common.row_to_singer_record(stream=streams_to_sync[tap_stream_id],
                                                                  row=change['fullDocument'],
                                                                  time_extracted=utils.now(),
-                                                                 time_deleted=None))
+                                                                 time_deleted=None,
+                                                                 version=stream_version))
+
+                rows_saved[tap_stream_id] += 1
+                
+            elif operation == 'replace':
+                singer.write_message(common.row_to_singer_record(stream=streams_to_sync[tap_stream_id],
+                                                                 row=change['fullDocument'],
+                                                                 time_extracted=utils.now(),
+                                                                 time_deleted=None,
+                                                                 version=stream_version))
 
                 rows_saved[tap_stream_id] += 1
 
             elif operation == 'update':
-                # update operation only return _id and updated fields in the row,
-                # so saving _id for now until we fetch the document when it's time to flush the buffer
-                update_buffer[tap_stream_id].add(change['documentKey']['_id'])
+                singer.write_message(common.row_to_singer_record(stream=streams_to_sync[tap_stream_id],
+                                                                 row=change['fullDocument'],
+                                                                 time_extracted=utils.now(),
+                                                                 time_deleted=None,
+                                                                 version=stream_version))
+
+                rows_saved[tap_stream_id] += 1
 
             elif operation == 'delete':
-                # remove update from buffer if that document has been deleted
-                update_buffer[tap_stream_id].discard(change['documentKey']['_id'])
-
                 # Delete ops only contain the _id of the row deleted
                 singer.write_message(common.row_to_singer_record(
                     stream=streams_to_sync[tap_stream_id],
                     row={'_id': change['documentKey']['_id']},
                     time_extracted=utils.now(),
-                    time_deleted=change[
-                        'clusterTime'].as_datetime()))  # returns python's datetime.datetime instance in UTC
+                    time_deleted=change['clusterTime'].as_datetime(), # returns python's datetime.datetime instance in UTC
+                    version=stream_version))
 
                 rows_saved[tap_stream_id] += 1
 
             # update the states of all streams
             state = update_bookmarks(state, stream_ids, resume_token)
 
-            # flush buffer if it has filled up or flush and write state every UPDATE_BOOKMARK_PERIOD messages
-            if sum(len(stream_buffer) for stream_buffer in update_buffer.values()) >= update_buffer_size or \
-                    sum(rows_saved.values()) % common.UPDATE_BOOKMARK_PERIOD == 0:
-
-                LOGGER.debug('Flushing update buffer ...')
-
-                flush_buffer(update_buffer, streams_to_sync, database, rows_saved)
-
-                if sum(rows_saved.values()) % common.UPDATE_BOOKMARK_PERIOD == 0:
-                    # write state
-                    singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
-
-    # flush buffer if finished with changeStreams
-    flush_buffer(update_buffer, streams_to_sync, database, rows_saved)
+            # write state every UPDATE_BOOKMARK_PERIOD messages
+            if sum(rows_saved.values()) % common.UPDATE_BOOKMARK_PERIOD == 0:
+                LOGGER.debug('Writing state...')
+                singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
     for stream_id in stream_ids:
         common.COUNTS[stream_id] += rows_saved[stream_id]
         common.TIMES[stream_id] += time.time() - start_time
         LOGGER.info('Syncd %s records for %s', rows_saved[stream_id], stream_id)
-
-
-def flush_buffer(buffer: Dict[str, Set], streams: Dict[str, Dict], database: Database, rows_saved: Dict[str, int]):
-    """
-    Flush and reset the given buffer, it increments the row_saved count in the given rows_saved dictionary
-    Args:
-        database: mongoDB DB instance
-        buffer: A set of rows to flush per stream
-        streams: streams whose rows to flush
-        rows_saved: map of streams to number of rows saved, this dictionary needs to be incremented
-    Returns:
-
-    """
-    # flush all streams buffers
-    for stream_id, stream_buffer in buffer.items():
-
-        if stream_buffer:
-            stream = streams[stream_id]
-
-            for buffered_row in get_buffer_rows_from_db(database[stream['table_name']],
-                                                        stream_buffer):
-                record_message = common.row_to_singer_record(stream=stream,
-                                                             row=buffered_row,
-                                                             time_extracted=utils.now(),
-                                                             time_deleted=None)
-                singer.write_message(record_message)
-
-                rows_saved[stream_id] += 1
-
-            buffer[stream_id].clear()

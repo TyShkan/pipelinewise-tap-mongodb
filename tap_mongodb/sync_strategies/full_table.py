@@ -128,16 +128,15 @@ def sync_collection(collection: Collection, stream: Dict, state: Dict) -> None:
         common.TIMES[stream['tap_stream_id']] += time.time() - start_time
 
     # clear max pk value and last pk fetched upon successful sync
-    singer.clear_bookmark(state, stream['tap_stream_id'], 'max_id_value')
-    singer.clear_bookmark(state, stream['tap_stream_id'], 'max_id_type')
-    singer.clear_bookmark(state, stream['tap_stream_id'], 'last_id_fetched')
-    singer.clear_bookmark(state, stream['tap_stream_id'], 'last_id_fetched_type')
+    state = singer.clear_bookmark(state, stream['tap_stream_id'], 'max_id_value')
+    state = singer.clear_bookmark(state, stream['tap_stream_id'], 'max_id_type')
+    state = singer.clear_bookmark(state, stream['tap_stream_id'], 'last_id_fetched')
+    state = singer.clear_bookmark(state, stream['tap_stream_id'], 'last_id_fetched_type')
 
-    singer.write_bookmark(state,
+    state = singer.write_bookmark(state,
                           stream['tap_stream_id'],
                           'initial_full_table_complete',
                           True)
-
-    # singer.write_message(activate_version_message)
+    singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
     LOGGER.info('Syncd %s records for %s', rows_saved, stream['tap_stream_id'])
