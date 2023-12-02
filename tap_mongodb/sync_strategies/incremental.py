@@ -9,6 +9,7 @@ from pymongo.collection import Collection
 from singer import metadata, utils
 
 from tap_mongodb.sync_strategies import common
+from tap_mongodb.metrics import record_counter_dynamic
 
 LOGGER = singer.get_logger('tap_mongodb')
 
@@ -69,16 +70,6 @@ def sync_collection(collection: Collection,
                                   nascent_stream_version)
     singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
-    # For the initial replication, emit an ACTIVATE_VERSION message
-    # at the beginning so the records show up right away.
-    if first_run:
-        activate_version_message = singer.ActivateVersionMessage(
-            stream=common.calculate_destination_stream_name(stream),
-            version=nascent_stream_version
-        )
-        LOGGER.info("Activate version %s", nascent_stream_version)
-        singer.write_message(activate_version_message)
-
     # get replication key, and bookmarked value/type
     stream_state = state.get('bookmarks', {}).get(stream['tap_stream_id'], {})
 
@@ -95,28 +86,38 @@ def sync_collection(collection: Collection,
     # log query
     LOGGER.info('Querying %s with: %s', stream['tap_stream_id'], dict(find=find_filter))
 
-    with collection.find(find_filter,
-                         sort=[(replication_key_name, pymongo.ASCENDING)]) as cursor:
-        rows_saved = 0
-        start_time = time.time()
+    with record_counter_dynamic() as counter:
+        if first_run:
+            activate_version_message = singer.ActivateVersionMessage(
+                stream=common.calculate_destination_stream_name(stream),
+                version=nascent_stream_version
+            )
+            LOGGER.info("Activate version %s", nascent_stream_version)
+            singer.write_message(activate_version_message)
+            counter.increment(endpoint=stream['tap_stream_id'], metric_type="truncated")
 
-        for row in cursor:
+        with collection.find(find_filter,
+                            sort=[(replication_key_name, pymongo.ASCENDING)]) as cursor:
+            rows_saved = 0
+            start_time = time.time()
 
-            singer.write_message(common.row_to_singer_record(stream=stream,
-                                                             row=row,
-                                                             time_extracted=utils.now(),
-                                                             time_deleted=None,
-                                                             version=nascent_stream_version))
-            rows_saved += 1
+            for row in cursor:
+                singer.write_message(common.row_to_singer_record(stream=stream,
+                                                                row=row,
+                                                                time_extracted=utils.now(),
+                                                                time_deleted=None,
+                                                                version=nascent_stream_version))
+                rows_saved += 1
+                counter.increment(endpoint=stream['tap_stream_id'])
+                counter.increment(endpoint=stream['tap_stream_id'], metric_type="inserted")
+                state = update_bookmark(row, state, stream['tap_stream_id'], replication_key_name)
 
-            state = update_bookmark(row, state, stream['tap_stream_id'], replication_key_name)
+                if rows_saved % common.UPDATE_BOOKMARK_PERIOD == 0:
+                    singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
-            if rows_saved % common.UPDATE_BOOKMARK_PERIOD == 0:
-                singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
+            singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
-        singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
-
-        common.COUNTS[stream['tap_stream_id']] += rows_saved
-        common.TIMES[stream['tap_stream_id']] += time.time() - start_time
+            common.COUNTS[stream['tap_stream_id']] += rows_saved
+            common.TIMES[stream['tap_stream_id']] += time.time() - start_time
 
     LOGGER.info('Syncd %s records for %s', rows_saved, stream['tap_stream_id'])

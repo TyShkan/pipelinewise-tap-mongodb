@@ -9,6 +9,7 @@ from pymongo.collection import Collection
 from singer import utils
 
 from tap_mongodb.sync_strategies import common
+from tap_mongodb.metrics import record_counter_dynamic
 
 LOGGER = singer.get_logger('tap_mongodb')
 
@@ -57,16 +58,6 @@ def sync_collection(collection: Collection, stream: Dict, state: Dict) -> None:
                                   nascent_stream_version)
     singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
-    # For the initial replication, emit an ACTIVATE_VERSION message
-    # at the beginning so the records show up right away.
-    if first_run:
-        activate_version_message = singer.ActivateVersionMessage(
-            stream=common.calculate_destination_stream_name(stream),
-            version=nascent_stream_version
-        )
-        LOGGER.info("Activate version %s", nascent_stream_version)
-        singer.write_message(activate_version_message)
-
     if singer.get_bookmark(state, stream['tap_stream_id'], 'max_id_value'):
         # There is a bookmark
         max_id_value = common.string_to_class(singer.get_bookmark(state, stream['tap_stream_id'], 'max_id_value'),
@@ -98,34 +89,44 @@ def sync_collection(collection: Collection, stream: Dict, state: Dict) -> None:
 
     LOGGER.info('Querying %s with: %s', stream['tap_stream_id'], dict(find=find_filter))
 
-    with collection.find({'_id': find_filter},
-                         sort=[("_id", pymongo.ASCENDING)]) as cursor:
-        rows_saved = 0
-        start_time = time.time()
+    with record_counter_dynamic() as counter:
+        if first_run:
+            activate_version_message = singer.ActivateVersionMessage(
+                stream=common.calculate_destination_stream_name(stream),
+                version=nascent_stream_version
+            )
+            LOGGER.info("Activate version %s", nascent_stream_version)
+            singer.write_message(activate_version_message)
+            counter.increment(endpoint=stream['tap_stream_id'], metric_type="truncated")
 
-        for row in cursor:
-            rows_saved += 1
+        with collection.find({'_id': find_filter},
+                            sort=[("_id", pymongo.ASCENDING)]) as cursor:
+            rows_saved = 0
+            start_time = time.time()
 
-            singer.write_message(common.row_to_singer_record(stream=stream,
-                                                             row=row,
-                                                             time_extracted=utils.now(),
-                                                             time_deleted=None,
-                                                             version=nascent_stream_version))
+            for row in cursor:
+                singer.write_message(common.row_to_singer_record(stream=stream,
+                                                                row=row,
+                                                                time_extracted=utils.now(),
+                                                                time_deleted=None,
+                                                                version=nascent_stream_version))
+                rows_saved += 1
+                counter.increment(endpoint=stream['tap_stream_id'])
+                counter.increment(endpoint=stream['tap_stream_id'], metric_type="inserted")
+                state = singer.write_bookmark(state,
+                                            stream['tap_stream_id'],
+                                            'last_id_fetched',
+                                            common.class_to_string(row['_id'], row['_id'].__class__.__name__))
+                state = singer.write_bookmark(state,
+                                            stream['tap_stream_id'],
+                                            'last_id_fetched_type',
+                                            row['_id'].__class__.__name__)
 
-            state = singer.write_bookmark(state,
-                                          stream['tap_stream_id'],
-                                          'last_id_fetched',
-                                          common.class_to_string(row['_id'], row['_id'].__class__.__name__))
-            state = singer.write_bookmark(state,
-                                          stream['tap_stream_id'],
-                                          'last_id_fetched_type',
-                                          row['_id'].__class__.__name__)
+                if rows_saved % common.UPDATE_BOOKMARK_PERIOD == 0:
+                    singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
-            if rows_saved % common.UPDATE_BOOKMARK_PERIOD == 0:
-                singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
-
-        common.COUNTS[stream['tap_stream_id']] += rows_saved
-        common.TIMES[stream['tap_stream_id']] += time.time() - start_time
+            common.COUNTS[stream['tap_stream_id']] += rows_saved
+            common.TIMES[stream['tap_stream_id']] += time.time() - start_time
 
     # clear max pk value and last pk fetched upon successful sync
     state = singer.clear_bookmark(state, stream['tap_stream_id'], 'max_id_value')
