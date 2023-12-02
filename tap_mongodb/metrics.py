@@ -1,5 +1,6 @@
 import time
 from singer import metrics
+from singer.metrics import job_timer
 
 
 def record_counter(endpoint=None, metric_type="total", log_interval=metrics.DEFAULT_LOG_INTERVAL):
