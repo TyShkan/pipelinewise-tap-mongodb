@@ -307,8 +307,7 @@ def main_impl():
                 config['host'],
                 client.server_info().get('version', 'unknown'))
 
-    common.INCLUDE_SCHEMAS_IN_DESTINATION_STREAM_NAME = \
-        (config.get('include_schemas_in_destination_stream_name') == 'true')
+    common.INCLUDE_SCHEMAS_IN_DESTINATION_STREAM_NAME = config.get('include_schemas_in_destination_stream_name', False)
 
     if args.discover:
         do_discover(client, config)
