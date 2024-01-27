@@ -142,6 +142,7 @@ def sync_database(database: Database,
                                                                     row=change['fullDocument'],
                                                                     time_extracted=utils.now(),
                                                                     time_deleted=None,
+                                                                    time_updated=change['clusterTime'].as_datetime(),
                                                                     version=stream_version))
 
                     rows_saved[tap_stream_id] += 1
@@ -152,6 +153,7 @@ def sync_database(database: Database,
                                                                     row=change['fullDocument'],
                                                                     time_extracted=utils.now(),
                                                                     time_deleted=None,
+                                                                    time_updated=change['clusterTime'].as_datetime(),
                                                                     version=stream_version))
 
                     rows_saved[tap_stream_id] += 1
@@ -162,6 +164,7 @@ def sync_database(database: Database,
                                                                     row=change['fullDocument'],
                                                                     time_extracted=utils.now(),
                                                                     time_deleted=None,
+                                                                    time_updated=change['clusterTime'].as_datetime(),
                                                                     version=stream_version))
 
                     rows_saved[tap_stream_id] += 1

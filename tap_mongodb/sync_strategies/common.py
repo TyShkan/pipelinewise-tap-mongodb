@@ -16,6 +16,7 @@ from terminaltables import AsciiTable
 from tap_mongodb.errors import MongoInvalidDateTimeException, SyncException, UnsupportedKeyTypeException
 
 SDC_DELETED_AT = "_sdc_deleted_at"
+SDC_UPDATED_AT = "_sdc_updated_at"
 INCLUDE_SCHEMAS_IN_DESTINATION_STREAM_NAME = False
 UPDATE_BOOKMARK_PERIOD = 1000
 COUNTS = {}
@@ -186,13 +187,15 @@ def transform_value(value: Any, path) -> Any:
 def row_to_singer_record(stream: Dict,
                          row: Dict,
                          time_extracted: datetime.datetime,
-                         time_deleted: Optional[datetime.datetime],
+                         time_deleted: Optional[datetime.datetime] = None,
+                         time_updated: Optional[datetime.datetime] = None,
                          version: Optional[int] = None,
                          ) -> singer.RecordMessage:
     """
     Transforms row to singer record message
     Args:
         time_deleted: Datetime when row got deleted
+        time_updated: Datetime when row got updated
         stream: stream details
         row: DB row
         version: stream version
@@ -217,6 +220,11 @@ def row_to_singer_record(stream: Dict,
         'document': row_to_persist,
         SDC_DELETED_AT: utils.strftime(time_deleted) if time_deleted else None
     }
+
+    if time_updated:
+        row_to_persist.update({
+            SDC_UPDATED_AT: utils.strftime(time_updated) if time_updated else None
+        })
 
     return singer.RecordMessage(
         stream=calculate_destination_stream_name(stream),

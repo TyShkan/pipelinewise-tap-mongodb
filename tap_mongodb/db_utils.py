@@ -204,7 +204,15 @@ def produce_collection_schema(collection: Collection) -> Dict:
                     "type": [
                         "string",
                         "null"
-                    ]
+                    ],
+                    'format': 'date-time'
+                },
+                "_sdc_updated_at": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    'format': 'date-time'
                 },
             },
         }
