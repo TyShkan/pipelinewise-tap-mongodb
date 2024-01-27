@@ -217,9 +217,14 @@ def row_to_singer_record(stream: Dict,
 
     row_to_persist = {
         '_id': row_to_persist['_id'],
-        'document': row_to_persist,
-        SDC_DELETED_AT: utils.strftime(time_deleted) if time_deleted else None
+        'document': row_to_persist
     }
+
+    if time_deleted:
+        row_to_persist.update({
+            SDC_DELETED_AT: utils.strftime(time_deleted) if time_deleted else None
+        })
+        row_to_persist.pop('document')
 
     if time_updated:
         row_to_persist.update({
