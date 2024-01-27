@@ -137,12 +137,14 @@ def sync_database(database: Database,
 
                 operation = change['operationType']
 
+                payload_timestamp = change['clusterTime'].as_datetime() # returns python's datetime.datetime instance in UTC
+
                 if operation == 'insert':
                     singer.write_message(common.row_to_singer_record(stream=streams_to_sync[tap_stream_id],
                                                                     row=change['fullDocument'],
                                                                     time_extracted=utils.now(),
                                                                     time_deleted=None,
-                                                                    time_updated=change['clusterTime'].as_datetime(),
+                                                                    time_updated=payload_timestamp,
                                                                     version=stream_version))
 
                     rows_saved[tap_stream_id] += 1
@@ -153,7 +155,7 @@ def sync_database(database: Database,
                                                                     row=change['fullDocument'],
                                                                     time_extracted=utils.now(),
                                                                     time_deleted=None,
-                                                                    time_updated=change['clusterTime'].as_datetime(),
+                                                                    time_updated=payload_timestamp,
                                                                     version=stream_version))
 
                     rows_saved[tap_stream_id] += 1
@@ -164,7 +166,7 @@ def sync_database(database: Database,
                                                                     row=change['fullDocument'],
                                                                     time_extracted=utils.now(),
                                                                     time_deleted=None,
-                                                                    time_updated=change['clusterTime'].as_datetime(),
+                                                                    time_updated=payload_timestamp,
                                                                     version=stream_version))
 
                     rows_saved[tap_stream_id] += 1
@@ -176,7 +178,7 @@ def sync_database(database: Database,
                         stream=streams_to_sync[tap_stream_id],
                         row={'_id': change['documentKey']['_id']},
                         time_extracted=utils.now(),
-                        time_deleted=change['clusterTime'].as_datetime(), # returns python's datetime.datetime instance in UTC
+                        time_deleted=payload_timestamp,
                         version=stream_version))
 
                     rows_saved[tap_stream_id] += 1
