@@ -140,4 +140,4 @@ def sync_collection(collection: Collection, stream: Dict, state: Dict) -> None:
                           True)
     singer.write_message(singer.StateMessage(value=copy.deepcopy(state)))
 
-    LOGGER.info('Syncd %s records for %s', rows_saved, stream['tap_stream_id'])
+    LOGGER.info('Synced %s records for %s', rows_saved, stream['tap_stream_id'])

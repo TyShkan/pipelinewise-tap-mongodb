@@ -162,15 +162,21 @@ def sync_database(database: Database,
                     counter.increment(endpoint=tap_stream_id, metric_type="replaced")
 
                 elif operation == 'update':
-                    singer.write_message(common.row_to_singer_record(stream=streams_to_sync[tap_stream_id],
-                                                                    row=change['fullDocument'],
-                                                                    time_extracted=utils.now(),
-                                                                    time_deleted=None,
-                                                                    time_updated=payload_timestamp,
-                                                                    version=stream_version))
+                    full_document = change.get('fullDocument')
 
-                    rows_saved[tap_stream_id] += 1
-                    counter.increment(endpoint=tap_stream_id, metric_type="updated")
+                    if full_document:
+                        singer.write_message(common.row_to_singer_record(stream=streams_to_sync[tap_stream_id],
+                                                                        row=full_document,
+                                                                        time_extracted=utils.now(),
+                                                                        time_deleted=None,
+                                                                        time_updated=payload_timestamp,
+                                                                        version=stream_version))
+
+                        rows_saved[tap_stream_id] += 1
+                        counter.increment(endpoint=tap_stream_id, metric_type="updated")
+                    else:
+                        LOGGER.warning(f"Received UPDATE operation for already deleted object, skipping update: {change}")
+                        counter.increment(endpoint=tap_stream_id, metric_type="skipped")
 
                 elif operation == 'delete':
                     # Delete ops only contain the _id of the row deleted
@@ -197,4 +203,4 @@ def sync_database(database: Database,
     for stream_id in stream_ids:
         common.COUNTS[stream_id] += rows_saved[stream_id]
         common.TIMES[stream_id] += time.time() - start_time
-        LOGGER.info('Syncd %s records for %s', rows_saved[stream_id], stream_id)
+        LOGGER.info('Synced %s records for %s', rows_saved[stream_id], stream_id)

@@ -213,7 +213,12 @@ def row_to_singer_record(stream: Dict,
                           if not isinstance(v, (bson.min_key.MinKey, bson.max_key.MaxKey))}
     except MongoInvalidDateTimeException as ex:
         raise SyncException(
-            f"Error syncing collection {stream['tap_stream_id']}, object ID {row['_id']} - {ex}") from ex
+            f"Error syncing collection {stream['tap_stream_id']}, object ID {row.get('_id')}: {ex}"
+        ) from ex
+    except Exception as ex:
+        raise SyncException(
+            f"Error syncing collection {stream['tap_stream_id']}, object {row}: {ex}"
+        ) from ex
 
     row_to_persist = {
         '_id': row_to_persist['_id'],

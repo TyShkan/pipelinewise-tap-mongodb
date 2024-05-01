@@ -120,4 +120,4 @@ def sync_collection(collection: Collection,
             common.COUNTS[stream['tap_stream_id']] += rows_saved
             common.TIMES[stream['tap_stream_id']] += time.time() - start_time
 
-    LOGGER.info('Syncd %s records for %s', rows_saved, stream['tap_stream_id'])
+    LOGGER.info('Synced %s records for %s', rows_saved, stream['tap_stream_id'])
