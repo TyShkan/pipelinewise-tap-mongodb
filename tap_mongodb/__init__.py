@@ -301,7 +301,7 @@ def main_impl():
         config = args.config
 
     connection_string = get_connection_string(config)
-    client = MongoClient(connection_string)
+    client = MongoClient(connection_string, datetime_conversion='DATETIME_AUTO')
 
     LOGGER.info('Connected to MongoDB host: %s, version: %s',
                 config['host'],
