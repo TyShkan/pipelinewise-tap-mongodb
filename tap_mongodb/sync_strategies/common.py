@@ -10,6 +10,7 @@ import tzlocal
 
 from typing import Dict, Any, Optional
 from bson import objectid, timestamp, datetime as bson_datetime
+from bson.datetime_ms import DatetimeMS
 from singer import utils, metadata
 from terminaltables import AsciiTable
 
@@ -69,6 +70,11 @@ def class_to_string(key_value: Any, key_type: str) -> str:
     Returns: string equivalent of key value
     Raises: UnsupportedKeyTypeException if key_type is not supported
     """
+    if key_type == 'datetimems':
+        key_value_sec, key_value_ms = divmod(int(key_value), 1000)
+
+        return f"{time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(key_value_sec))}.{key_value_ms:03d}Z"
+
     if key_type == 'datetime':
         if key_value.tzinfo is None:
             timezone = tzlocal.get_localzone()
@@ -176,6 +182,7 @@ def transform_value(value: Any, path) -> Any:
         bson.regex.Regex: lambda val, _: dict(pattern=val.pattern, flags=val.flags),
         bson.code.Code: lambda val, _: dict(value=str(val), scope=str(val.scope)) if val.scope else str(val),
         bson.dbref.DBRef: lambda val, _: dict(id=str(val.id), collection=val.collection, database=val.database),
+        DatetimeMS: lambda val, _: class_to_string(val, 'datetimems'),
     }
 
     if isinstance(value, tuple(conversion.keys())):
